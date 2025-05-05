@@ -1,35 +1,31 @@
-#include <iostream>
-#include <opencv2/opencv.hpp>
-#include <vector>
 #include <mpi.h>
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <vector>
 #include <chrono>
 
-using namespace cv;
 using namespace std;
+using namespace cv;
 
-// Function to generate a dynamic high-pass filter kernel
-vector<int> generateKernel(int kernelSize) {
-    vector<int> kernel(kernelSize * kernelSize, -1);
-    int center = kernelSize / 2;
-    kernel[center * kernelSize + center] = kernelSize * kernelSize - 1; // Center weight
-    return kernel;
-}
+std::chrono::time_point<std::chrono::high_resolution_clock> start;
 
-// Function to apply a high-pass filter to a chunk of the image
-void applyHighPassFilter(const unsigned char* imageArray, unsigned char* filteredImage, int rows, int cols, const vector<int>& kernel, int kernelSize, int startRow, int endRow) {
-    int offset = kernelSize / 2;
+// 3x3 Laplacian kernel
+int kernel[3][3] = {
+    {  0, -1,  0 },
+    { -1,  4, -1 },
+    {  0, -1,  0 }
+};
 
-    for (int i = startRow; i < endRow; ++i) {
-        for (int j = offset; j < cols - offset; ++j) {
-            int sum = 0;
-            for (int k = -offset; k <= offset; ++k) {
-                for (int l = -offset; l <= offset; ++l) {
-                    sum += imageArray[(i + k) * cols + (j + l)] * kernel[(k + offset) * kernelSize + (l + offset)];
-                }
-            }
-            filteredImage[i * cols + j] = static_cast<unsigned char>(std::min(std::max(sum, 0), 255));
+uchar apply_kernel(const Mat& img, int row, int col) {
+    int sum = 0;
+    for (int i = -1; i <= 1; ++i) {
+        for (int j = -1; j <= 1; ++j) {
+            int r = min(max(row + i, 0), img.rows - 1);
+            int c = min(max(col + j, 0), img.cols - 1);
+            sum += img.at<uchar>(r, c) * kernel[i + 1][j + 1];
         }
     }
+    return saturate_cast<uchar>(sum);
 }
 
 int main(int argc, char** argv) {
@@ -39,130 +35,86 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    cv::Mat img;
+    Mat image, gray;
     int rows, cols;
 
     if (rank == 0) {
-        // Process 0 reads the image
-        img = cv::imread("Input/lena.png", cv::IMREAD_GRAYSCALE);
-        if (img.empty()) {
-            std::cerr << "Error: Could not open or find the image.\n";
+        image = imread("Input/lena.png", IMREAD_GRAYSCALE);
+        if (image.empty()) {
+            cerr << "Image not found!" << endl;
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        cout << "Image Loaded Successfully\n";
-
-        rows = img.rows;
-        cols = img.cols;
+        rows = image.rows;
+        cols = image.cols;
+        cout << "Image Loaded Successfully" << endl;
+        cout << "Image dimensions: " << rows << " x " << cols << endl;
+        start = chrono::high_resolution_clock::now();
     }
 
-    // Broadcast image dimensions to all processes
     MPI_Bcast(&rows, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&cols, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    // Allocate memory for the image and filtered image
-    unsigned char* imageArray = nullptr;
-    unsigned char* filteredImage = new unsigned char[rows * cols]();
+    int rows_per_proc = rows / size;
+    int remainder = rows % size;
+    int local_rows = rows_per_proc + (rank < remainder ? 1 : 0);
+
+    // Allocate local buffer with padding for filtering
+    Mat local_chunk(local_rows + 2, cols, CV_8UC1, Scalar(0));
+
+    vector<int> sendcounts(size), displs(size);
+    int offset = 0;
+    for (int i = 0; i < size; ++i) {
+        int rpp = rows_per_proc + (i < remainder ? 1 : 0);
+        sendcounts[i] = rpp * cols;
+        displs[i] = offset;
+        offset += rpp * cols;
+    }
 
     if (rank == 0) {
-        imageArray = img.data;
+        // Prepare data for scatter
+        vector<uchar> flat_image(image.begin<uchar>(), image.end<uchar>());
+        MPI_Scatterv(flat_image.data(), sendcounts.data(), displs.data(), MPI_UNSIGNED_CHAR,
+                     local_chunk.ptr(1), local_rows * cols, MPI_UNSIGNED_CHAR,
+                     0, MPI_COMM_WORLD);
+    } else {
+        MPI_Scatterv(nullptr, nullptr, nullptr, MPI_UNSIGNED_CHAR,
+                     local_chunk.ptr(1), local_rows * cols, MPI_UNSIGNED_CHAR,
+                     0, MPI_COMM_WORLD);
     }
 
-    while (true) {
-        int kernelSize;
-        vector<int> kernel;
+    // Exchange rows with neighbors
+    if (rank > 0)
+        MPI_Sendrecv(local_chunk.ptr(1), cols, MPI_UNSIGNED_CHAR, rank - 1, 0,
+                     local_chunk.ptr(0), cols, MPI_UNSIGNED_CHAR, rank - 1, 0,
+                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-        if (rank == 0) {
-            // Prompt the user for the kernel size
-            cout << "Enter the kernel size (odd number greater than 1, or 0 to exit): ";
-            cin >> kernelSize;
+    if (rank < size - 1)
+        MPI_Sendrecv(local_chunk.ptr(local_rows), cols, MPI_UNSIGNED_CHAR, rank + 1, 0,
+                     local_chunk.ptr(local_rows + 1), cols, MPI_UNSIGNED_CHAR, rank + 1, 0,
+                     MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-            if (kernelSize == 0) {
-                cout << "Exiting program.\n";
-                break;
-            }
+    // Apply filter
+    Mat filtered(local_rows, cols, CV_8UC1);
+    for (int i = 1; i <= local_rows; ++i)
+        for (int j = 0; j < cols; ++j)
+            filtered.at<uchar>(i - 1, j) = apply_kernel(local_chunk, i, j);
 
-            if (kernelSize < 3 || kernelSize % 2 == 0) {
-                cerr << "Error: Kernel size must be an odd number greater than or equal to 3.\n";
-                continue;
-            }
+    // Gather result
+    Mat final_image;
+    if (rank == 0)
+        final_image = Mat(rows, cols, CV_8UC1);
 
-            kernel = generateKernel(kernelSize);
-        }
+    MPI_Gatherv(filtered.data, local_rows * cols, MPI_UNSIGNED_CHAR,
+                final_image.data, sendcounts.data(), displs.data(), MPI_UNSIGNED_CHAR,
+                0, MPI_COMM_WORLD);
 
-        // Broadcast the kernel size and kernel to all processes
-        MPI_Bcast(&kernelSize, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-        if (rank != 0) {
-            kernel.resize(kernelSize * kernelSize);
-        }
-        MPI_Bcast(kernel.data(), kernel.size(), MPI_INT, 0, MPI_COMM_WORLD);
-
-        // Calculate sendcounts and displacements for MPI_Scatterv
-        vector<int> sendcounts(size, 0);
-        vector<int> displs(size, 0);
-
-        int rowsPerProcess = rows / size;
-        int extraRows = rows % size;
-
-        for (int i = 0; i < size; ++i) {
-            sendcounts[i] = (rowsPerProcess + (i < extraRows ? 1 : 0)) * cols;
-            displs[i] = (i > 0 ? displs[i - 1] + sendcounts[i - 1] : 0);
-        }
-
-        int localRows = sendcounts[rank] / cols;
-        unsigned char* localImageArray = new unsigned char[sendcounts[rank] + 2 * cols]; // Add halo rows
-        unsigned char* localFilteredImage = new unsigned char[sendcounts[rank]]();
-
-        // Scatter rows of the image to all processes
-        MPI_Scatterv(imageArray, sendcounts.data(), displs.data(), MPI_UNSIGNED_CHAR, localImageArray + cols, sendcounts[rank], MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
-
-        // Copy halo rows for boundary handling
-        if (rank > 0) {
-            MPI_Recv(localImageArray, cols, MPI_UNSIGNED_CHAR, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        }
-        if (rank < size - 1) {
-            MPI_Send(localImageArray + sendcounts[rank], cols, MPI_UNSIGNED_CHAR, rank + 1, 0, MPI_COMM_WORLD);
-        }
-
-        // Measure the time taken by the applyHighPassFilter function
-        auto start = std::chrono::high_resolution_clock::now();
-
-        // Apply the high-pass filter to the local chunk
-        int startRow = displs[rank] / cols;
-        int endRow = startRow + localRows;
-        applyHighPassFilter(localImageArray, localFilteredImage, rows, cols, kernel, kernelSize, startRow, endRow);
-
-        auto end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> elapsed = end - start;
-
-        if (rank == 0) {
-            cout << "Time taken by applyHighPassFilter for kernel size " << kernelSize << ": " << elapsed.count() << " seconds.\n";
-        }
-
-        // Gather the filtered chunks back to process 0
-        MPI_Gatherv(localFilteredImage, sendcounts[rank], MPI_UNSIGNED_CHAR, filteredImage, sendcounts.data(), displs.data(), MPI_UNSIGNED_CHAR, 0, MPI_COMM_WORLD);
-
-        if (rank == 0) {
-            // Convert the filtered image back to cv::Mat
-            cv::Mat filteredImg(rows, cols, CV_8UC1, filteredImage);
-
-            // Save and display the filtered image
-            string outputFileName = "Output/MPI/kernel_" + to_string(kernelSize) + ".jpg";
-            cv::imwrite(outputFileName, filteredImg);
-            cout << "Filtered image saved successfully as " << outputFileName << ".\n";
-
-            cv::imshow("Filtered Image", filteredImg);
-            cv::waitKey(0);
-            cv::destroyAllWindows();
-        }
-
-        // Free allocated memory for this iteration
-        delete[] localImageArray;
-        delete[] localFilteredImage;
+    if (rank == 0) {
+        auto end = chrono::high_resolution_clock::now();
+        chrono::duration<double> elapsed = end - start;
+        cout << "Time taken: " << elapsed.count() << " seconds" << endl;
+        imwrite("output.jpg", final_image);
+        cout << "High-pass filter applied and saved to output.jpg" << endl;
     }
-
-    // Free allocated memory
-    delete[] filteredImage;
 
     MPI_Finalize();
     return 0;
