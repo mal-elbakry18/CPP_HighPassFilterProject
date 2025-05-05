@@ -11,24 +11,33 @@ using namespace cv;
 
 std::chrono::time_point<std::chrono::high_resolution_clock> start;
 
-// 3x3 Laplacian kernel
-int kernel[3][3] = {
-    {  0, -1,  0 },
-    { -1,  4, -1 },
-    {  0, -1,  0 }
-};
+// // 3x3 Laplacian kernel
+// int kernel[3][3] = {
+//     {  0, -1,  0 },
+//     { -1,  4, -1 },
+//     {  0, -1,  0 }
+// };
 
-uchar apply_kernel(const Mat& img, int row, int col) {
+
+vector<vector<int>> generateKernel(int ksize) {
+    vector<vector<int>> kernel(ksize, vector<int>(ksize, -1));
+    kernel[ksize / 2][ksize / 2] = ksize * ksize - 1;
+    return kernel;
+}
+
+uchar apply_kernel(const Mat& img, int row, int col, const vector<vector<int>>& kernel, int ksize) {
     int sum = 0;
-    for (int i = -1; i <= 1; ++i) {
-        for (int j = -1; j <= 1; ++j) {
+    int offset = ksize / 2;
+    for (int i = -offset; i <= offset; ++i) {
+        for (int j = -offset; j <= offset; ++j) {
             int r = min(max(row + i, 0), img.rows - 1);
             int c = min(max(col + j, 0), img.cols - 1);
-            sum += img.at<uchar>(r, c) * kernel[i + 1][j + 1];
+            sum += img.at<uchar>(r, c) * kernel[i + offset][j + offset];
         }
     }
     return saturate_cast<uchar>(sum);
 }
+
 
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
@@ -37,11 +46,32 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
+
+    if (argc < 3) {
+        if (rank == 0)
+            cerr << "Usage: mpirun -np <num_processes> ./MPI_filter <image_path> <kernel_size>" << endl;
+        MPI_Finalize();
+        return 1;
+    }
+    
+    string image_path = argv[1];
+    int ksize = atoi(argv[2]);
+    vector<vector<int>> kernel = generateKernel(ksize);
+
+    
+    if (ksize < 3 || ksize % 2 == 0) {
+        if (rank == 0)
+            cerr << "Kernel size must be odd and >= 3." << endl;
+        MPI_Finalize();
+        return 1;
+    }
+    
+
     Mat image, gray;
     int rows, cols;
 
     if (rank == 0) {
-        image = imread("Input/lena.png", IMREAD_GRAYSCALE);
+        image = imread(image_path, IMREAD_GRAYSCALE);
         if (image.empty()) {
             cerr << "Image not found!" << endl;
             MPI_Abort(MPI_COMM_WORLD, 1);
@@ -110,9 +140,9 @@ int main(int argc, char** argv) {
 
     // Apply filter
     Mat filtered(local_rows, cols, CV_8UC1);
-    for (int i = 1; i <= local_rows; ++i)
+    for (int i = 1; i <= local_rows ; ++i)
         for (int j = 0; j < cols; ++j)
-            filtered.at<uchar>(i - 1, j) = apply_kernel(local_chunk, i, j);
+            filtered.at<uchar>(i - 1, j) = apply_kernel(local_chunk, i, j, kernel, ksize);
 
     // Gather result
     Mat final_image;
@@ -127,7 +157,7 @@ int main(int argc, char** argv) {
         auto end = chrono::high_resolution_clock::now();
         chrono::duration<double> elapsed = end - start;
         cout << "Time taken: " << elapsed.count() << " seconds" << endl;
-        imwrite("output_2.jpg", final_image);
+        imwrite("output_3.jpg", final_image);
         cout << "High-pass filter applied and saved to output.jpg" << endl;
         // 🖼️ Show original and filtered images
         imshow("Original Image", image);
