@@ -33,74 +33,138 @@ void applyHighPassFilter(const unsigned char* imageArray, unsigned char* filtere
     }
 }
 
-int main() {
-    // Read image in grayscale
-    cv::Mat img = cv::imread("Input/lena.png", cv::IMREAD_GRAYSCALE);
+int main(int argc, char** argv) {
+    
+    // // Read image in grayscale
+    // cv::Mat img = cv::imread("Input/thumbnail_lena.png", cv::IMREAD_GRAYSCALE);
 
-    if (img.empty()) {
-        std::cerr << "Error: Could not open or find the image.\n";
-        return 1;
-    }
-    cout << "Image Loaded Successfully\n";
+    // if (img.empty()) {
+    //     std::cerr << "Error: Could not open or find the image.\n";
+    //     return 1;
+    // }
+    // cout << "Image Loaded Successfully\n";
 
-    int rows = img.rows;
-    int cols = img.cols;
-    std::cout << "Image dimensions: " << rows << " x " << cols << "\n";
+    // int rows = img.rows;
+    // int cols = img.cols;
+    // std::cout << "Image dimensions: " << rows << " x " << cols << "\n";
 
-    // Flatten the image into a 1D array for better memory locality
-    unsigned char* imageArray = img.data;
+    // // Flatten the image into a 1D array for better memory locality
+    // unsigned char* imageArray = img.data;
 
-    while (true) {
-        // Get kernel size from the user
-        int kernelSize;
-        cout << "Enter the kernel size (odd number greater than 1, or 0 to exit): ";
-        cin >> kernelSize;
+    // while (true) {
+    //     // Get kernel size from the user
+    //     int kernelSize;
+    //     cout << "Enter the kernel size (odd number greater than 1, or 0 to exit): ";
+    //     cin >> kernelSize;
 
-        if (kernelSize == 0) {
-            cout << "Exiting program.\n";
-            break;
+    //     if (kernelSize == 0) {
+    //         cout << "Exiting program.\n";
+    //         break;
+    //     }
+
+    //     if (kernelSize < 3 || kernelSize % 2 == 0) {
+    //         cerr << "Error: Kernel size must be an odd number greater than or equal to 3.\n";
+    //         continue;
+    //     }
+
+    //     // Generate the kernel
+    //     vector<int> kernel = generateKernel(kernelSize);
+
+    //     // Allocate memory for the filtered image
+    //     unsigned char* filteredImage = new unsigned char[rows * cols]();
+
+    //     // Start measuring time
+    //     auto start = std::chrono::high_resolution_clock::now();
+
+    //     // Apply high-pass filter
+    //     applyHighPassFilter(imageArray, filteredImage, rows, cols, kernel, kernelSize);
+
+    //     // Stop measuring time
+    //     auto end = std::chrono::high_resolution_clock::now();
+    //     std::chrono::duration<double> elapsed = end - start;
+
+    //     // Convert the filtered image back to cv::Mat
+    //     cv::Mat filteredImg(rows, cols, CV_8UC1, filteredImage);
+
+    //     // Display the filtered image
+    //     cv::imshow("Filtered Image", filteredImg);
+    //     cv::waitKey(0);
+    //     cv::destroyAllWindows();
+
+    //     // Save the filtered image
+    //     string outputFileName = "Output/openMP/kernel_" + to_string(kernelSize) + ".jpg";
+    //     cv::imwrite(outputFileName, filteredImg);
+    //     cout << "Filtered image with kernel size " << kernelSize << " saved successfully as " << outputFileName << ".\n";
+
+    //     // Print the elapsed time
+    //     std::cout << "Execution time for kernel size " << kernelSize << ": " << elapsed.count() << " seconds.\n";
+
+    //     // Free allocated memory
+    //     delete[] filteredImage;
+    // }
+
+    
+        if (argc < 3) {
+            cerr << "Usage: " << argv[0] << " <image_path> <kernel_size>\n";
+            return 1;
         }
-
+    
+        string imagePath = argv[1];
+        int kernelSize = atoi(argv[2]);
+    
         if (kernelSize < 3 || kernelSize % 2 == 0) {
             cerr << "Error: Kernel size must be an odd number greater than or equal to 3.\n";
-            continue;
+            return 1;
         }
-
+    
+        // Read image in grayscale
+        cv::Mat img = cv::imread(imagePath, cv::IMREAD_GRAYSCALE);
+        if (img.empty()) {
+            cerr << "Error: Could not open or find the image at " << imagePath << "\n";
+            return 1;
+        }
+        cout << "Image Loaded Successfully\n";
+    
+        int rows = img.rows;
+        int cols = img.cols;
+        cout << "Image dimensions: " << rows << " x " << cols << "\n";
+    
+        unsigned char* imageArray = img.data;
+    
         // Generate the kernel
         vector<int> kernel = generateKernel(kernelSize);
-
+    
         // Allocate memory for the filtered image
         unsigned char* filteredImage = new unsigned char[rows * cols]();
-
+    
         // Start measuring time
-        auto start = std::chrono::high_resolution_clock::now();
-
+        auto start = chrono::high_resolution_clock::now();
+    
         // Apply high-pass filter
         applyHighPassFilter(imageArray, filteredImage, rows, cols, kernel, kernelSize);
-
-        // Stop measuring time
-        auto end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> elapsed = end - start;
-
+    
+        auto end = chrono::high_resolution_clock::now();
+        chrono::duration<double> elapsed = end - start;
+    
         // Convert the filtered image back to cv::Mat
         cv::Mat filteredImg(rows, cols, CV_8UC1, filteredImage);
-
-        // Display the filtered image
-        cv::imshow("Filtered Image", filteredImg);
-        cv::waitKey(0);
-        cv::destroyAllWindows();
-
+    
+        // // Display the filtered image
+        // cv::imshow("Filtered Image", filteredImg);
+        // cv::waitKey(0);
+        // cv::destroyAllWindows();
+    
         // Save the filtered image
         string outputFileName = "Output/openMP/kernel_" + to_string(kernelSize) + ".jpg";
         cv::imwrite(outputFileName, filteredImg);
         cout << "Filtered image with kernel size " << kernelSize << " saved successfully as " << outputFileName << ".\n";
-
-        // Print the elapsed time
-        std::cout << "Execution time for kernel size " << kernelSize << ": " << elapsed.count() << " seconds.\n";
-
-        // Free allocated memory
+    
+        // Print elapsed time
+        cout << "Execution time for kernel size " << kernelSize << ": " << elapsed.count() << " seconds.\n";
+    
         delete[] filteredImage;
-    }
+   
+    
 
     return 0;
 }
