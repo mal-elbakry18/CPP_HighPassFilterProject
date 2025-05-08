@@ -12,7 +12,7 @@ results_file = "results.txt"
 executables = {
     "Sequential": "./sequential_2",
     "OpenMP": "./openMP_filter",
-    "MPI": "mpirun -np 4 ./MPI_filter_2"
+    #"MPI": "mpirun -np 4 ./MPI_filter_2"
 }
 kernel_sizes = [3, 5, 7, 9, 11]
 ignore_files = {"download.jpeg", "lena.png"}
@@ -84,6 +84,7 @@ for ksize in kernel_sizes:
                     f.write(f"{label},{image_name},{ksize},-,Exception,{output_path}\n")
 
 # Stress test
+
 if largest_image:
     ksize = 101
     print(f"\n=== Stress Test: Kernel 101 on {Path(largest_image).name} ===")
@@ -129,3 +130,55 @@ if largest_image:
             print(f"Exception: {e}")
             with open(results_file, "a") as f:
                 f.write(f"{label},{image_name},{ksize},-,Exception,{output_path}\n")
+# Custom Stress Test: Only on "thumbnail" image with kernel size 101
+# ksize = 101
+# thumbnail_image = None
+# for img in image_files:
+#     if "thumbnail" in Path(img).stem.lower():
+#         thumbnail_image = img
+#         break
+
+# if thumbnail_image:
+#     print(f"\n=== Stress Test: Kernel {ksize} on {Path(thumbnail_image).name} ===")
+#     kernel_output_dir = os.path.join(output_base, f"kernel_{ksize}")
+#     os.makedirs(kernel_output_dir, exist_ok=True)
+
+#     image_name = Path(thumbnail_image).stem
+#     for label, command in executables.items():
+#         out_name = f"{image_name}_{label.lower()}.jpg"
+#         output_path = os.path.join(kernel_output_dir, out_name)
+#         full_cmd = f"{command} {thumbnail_image} {ksize}"
+
+#         print(f"{label} | {image_name} | k={ksize}", end=": ")
+#         try:
+#             start = time.time()
+#             result = subprocess.run(full_cmd.split(), capture_output=True, text=True)
+#             elapsed = time.time() - start
+
+#             if result.returncode == 0:
+#                 original_folder = {
+#                     "Sequential": "Output/sequential",
+#                     "OpenMP": "Output/openMP",
+#                     "MPI": "Output/mpi"
+#                 }[label]
+#                 original_filename = f"kernel_{ksize}.jpg"
+#                 original_path = os.path.join(original_folder, original_filename)
+
+#                 if os.path.exists(original_path):
+#                     os.rename(original_path, output_path)
+#                     status = "Success"
+#                     print(f"{elapsed:.2f}s → {output_path}")
+#                 else:
+#                     status = "Missing Output"
+#                     print(f"{elapsed:.2f}s but image not found at {original_path}")
+#             else:
+#                 status = "Error"
+#                 print(f"Failed\n{result.stderr}")
+
+#             with open(results_file, "a") as f:
+#                 f.write(f"{label},{image_name},{ksize},{elapsed:.2f},{status},{output_path}\n")
+
+#         except Exception as e:
+#             print(f"Exception: {e}")
+#             with open(results_file, "a") as f:
+#                 f.write(f"{label},{image_name},{ksize},-,Exception,{output_path}\n")

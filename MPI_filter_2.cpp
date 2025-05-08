@@ -224,6 +224,7 @@ int main(int argc, char** argv) {
     int ksize = atoi(argv[2]);
     vector<vector<int>> kernel = generateKernel(ksize);
 
+    //Check kernel size
     if (ksize < 3 || ksize % 2 == 0) {
         if (rank == 0)
             cerr << "Kernel size must be odd and >= 3." << endl;
